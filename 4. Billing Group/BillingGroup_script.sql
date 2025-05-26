@@ -1,395 +1,226 @@
-USE [DinDWHS]
-GO
-/****** Object:  StoredProcedure [dbo].[spUpdateDimSalesForceRestaurantAndDimFingerprint]    Script Date: 3/16/2025 6:37:19 PM ******/
-SET ANSI_NULLS ON
-GO
-SET QUOTED_IDENTIFIER ON
-GO
+https://app.diagrams.net/#W58967C34B8950553%2F58967C34B8950553!s577ea8d41f2846179f5eeec40eb740ad#%7B%22pageId%22%3A%22hZX_jWn_f2lxAiJMkZBj%22%7D
+--select EOMONTH(MAX(TXNDATE)) from DinBilling.billing.detailinvoicehistorydata
 
---This stored procedure, [dbo].[spUpdateDimSalesForceRestaurantAndDimFingerprint], performs 
---ETL (Extract, Transform, Load) operations to update or synchronize data in the Dimensional 
---(Dim) tables DimSalesForceRestaurant, DimSalesForceBrand, and other related tables such as 
---FactTransaction and DimFingerprint. The procedure works within a transaction to ensure data 
---consistency.
+ --06.03.25 1st step: ranujemo script na prod serveru 
 
---Here’s what each section is doing:
-
-ALTER PROCEDURE [dbo].[spUpdateDimSalesForceRestaurantAndDimFingerprint]
--- WITH ENCRYPTION, RECOMPILE, EXECUTE AS CALLER|SELF|OWNER| 'user_name'
-AS BEGIN
-SET XACT_ABORT ON
-BEGIN TRY
-BEGIN TRANSACTION -- Purpose: Ensures that if an error occurs during the execution of the procedure, the transaction is automatically rolled back, preserving data consistency.
-
---Updating DimSalesForceRestaurant
-	ALTER TABLE DinDWHS.[dbo].DimFingerprint NOCHECK CONSTRAINT [FK_DimFingerprint_DimSFRestaurant];
-	ALTER TABLE DinDWHS.[dbo].FactTransaction NOCHECK CONSTRAINT [FK_FactTransaction_DimSFRestaurant];
-	ALTER TABLE DinDWHS.[dbo].FactTransaction NOCHECK CONSTRAINT [FK_FactTransaction_DimFingerprint];
-	ALTER TABLE DinDWHS.[dbo].[DimSalesForceRestaurant] NOCHECK CONSTRAINT [FK_DimSFRestaurant_DimSFRestaurant];
-	ALTER TABLE [dbo].[DimRestaurant] nocheck constraint [FK_DimRestaurant_DimSalesForceRestaurant];-- Purpose: 
-	--Temporarily disables foreign key constraints on related tables to allow updates and inserts without 
-	--constraint violations. This step is necessary if the updates affect data integrity constraints but must 
-	--be carefully managed to avoid leaving the database in an inconsistent state.
-
---Updating DimSalesForceBrand
-	MERGE [DinDWHS].[dbo].[DimSalesForceBrand] AS target
-	USING (
-			SELECT
-				bp.Id as BrandProfileId,
-				bp.BrandName,
-				bp.RestaurantSegment,
-				CASE 
-					WHEN bp.DiningGroupSegment IS NULL AND RestaurantSegment IN ('QSR', 'FAST CASUAL') THEN 'LSR'
-					WHEN bp.DiningGroupSegment IS NULL AND RestaurantSegment IN ('MIDSCALE', 'UPSCALE', 'FINE DINING', 'CASUAL') THEN 'FSR'
-					ELSE bp.DiningGroupSegment
-				END as DiningGroupSegment,
-				bp.PrimaryCuisine,
-				TRY_CAST (bp.CateringAmountThreshold AS DECIMAL(18,4)) as CateringAmountThreshold,
-				TRY_CAST (bp.LargeEventThreshold AS DECIMAL(18,4)) as LargeEventThreshold
-			FROM Dindb.[DinIntegrations].[SalesForce].[BrandProfile] bp
-			INNER JOIN (select distinct BrandProfileId COLLATE SQL_Latin1_General_CP1_CS_AS BrandProfileId from Dindb.[DinIntegrations].[SalesForce].[SfSync]) sfs
-			ON bp.Id COLLATE SQL_Latin1_General_CP1_CS_AS = sfs.BrandProfileId COLLATE SQL_Latin1_General_CP1_CS_AS
-			where nullif(bp.BrandName,'') is not null
-		) AS source
-	ON target.BrandProfileId COLLATE SQL_Latin1_General_CP1_CS_AS = source.BrandProfileId COLLATE SQL_Latin1_General_CP1_CS_AS
-	WHEN MATCHED 
-	AND 
-			ISNULL(target.BrandName, '') <> ISNULL(source.BrandName, '') OR
-			ISNULL(target.RestaurantSegment, '') <> ISNULL(source.RestaurantSegment, '') OR
-			ISNULL(target.DiningGroupSegment, '') <> ISNULL(source.DiningGroupSegment, '') OR
-			ISNULL(target.PrimaryCuisine, '') <> ISNULL(source.PrimaryCuisine, '') OR
-			ISNULL(target.CateringAmountThreshold, -1) <> ISNULL(source.CateringAmountThreshold, -1) OR
-			ISNULL(target.LargeEventThreshold, -1) <> ISNULL(source.LargeEventThreshold, -1) 
-	THEN 
-		UPDATE SET
-			target.BrandName = source.BrandName,
-			target.RestaurantSegment = source.RestaurantSegment,
-			target.DiningGroupSegment = source.DiningGroupSegment,
-			target.PrimaryCuisine = source.PrimaryCuisine,
-			target.CateringAmountThreshold = source.CateringAmountThreshold,
-			target.LargeEventThreshold = source.LargeEventThreshold 
-	WHEN NOT MATCHED THEN
-		INSERT (BrandProfileId, BrandName, RestaurantSegment, DiningGroupSegment, PrimaryCuisine, CateringAmountThreshold, LargeEventThreshold )
-		VALUES (source.BrandProfileId, 
-				source.BrandName, 
-				source.RestaurantSegment, 
-				source.DiningGroupSegment, 
-				source.PrimaryCuisine, 
-				source.CateringAmountThreshold, 
-				source.LargeEventThreshold);
- --  Purpose:
---Updates or inserts data into the DimSalesForceBrand table to reflect the latest information from the BrandProfile 
---table in the Integrations.SalesForce schema.
-
---Matching Criteria:
-
---Matches records in DimSalesForceBrand and BrandProfile based on BrandProfileId.
---Only updates records if there are changes in fields like BrandName, RestaurantSegment, etc.
---Insert Logic: Inserts new records into the DimSalesForceBrand table if they don’t exist in the target table.
-
---This continuation of the stored procedure [dbo].[spUpdateDimSalesForceRestaurantAndDimFingerprint] includes further 
---steps to update or insert data into multiple dimension tables (DimSalesForceRestaurant, DimFingerprint) and facts 
---(FactTransaction), ensuring data consistency and alignment with source systems like Salesforce.
-
---Updating DimSalesForceRestaurant
-	MERGE DinDWHS.[dbo].[DimSalesForceRestaurant] AS target
-	USING (
-			SELECT  DISTINCT b.AccountID COLLATE SQL_Latin1_General_CP1_CS_AS AS [SFKey], 
-					b.[GUID], 
-					b.AccountName,
-					isnull(dzc.geographyID, 0) AS GeographyID,
-					b.BillingAddressLine1 AS [BillingAddress],
-					b.BillingStateProvince AS [BillingState],
-					b.BillingCity AS [BillingCity],
-					ISNULL(b.LocationType,'') AS [LocationType],
-					ISNULL(db.BrandName, b.Brand) Brand,
-					ISNULL(b.Type,'') Type, 
-					CASE WHEN b.EAPV_date='1899-12-30 00:00:00.000' THEN 'Unverified' ELSE 'Verified' END AS [EAPV_status],
-					b.AccountOwner,
-					b.PrimaryCuisine AS [PrimaryCuisine], b.RestaurantProfile AS [RestaurantProfile], b.FoodserviceType AS [FoodserviceType],
-					IIF(ISNULL(b.ZupplerLocation,0)=1,'Yes','No') AS [ZupplerLocation],
-					b.Grade,
-					ISNULL(b.RestaurantTier,'N/A') RestaurantTier,
-					ISNULL(b.Segment,'N/A') Segment,
-					ISNULL(b.CuisineType,'N/A') CuisineType,
-					b.[Rank],
-					ISNULL(db.Id,0) as SalesForceBrandId
-			FROM DinDB.DinIntegrations.SalesForce.SfSync AS b
-			--LEFT JOIN DinDb.DinIntegrations.SalesForce.BrandProfile AS bp ON bp.Id collate latin1_general_cs_as = b.BrandProfileId collate latin1_general_cs_as
-				LEFT JOIN [DinDWHS].[dbo].[DimSalesForceBrand] db ON db.BrandProfileId collate latin1_general_cs_as = b.BrandProfileId collate latin1_general_cs_as
-					LEFT JOIN [DinDWHS].dbo.DimZIPCodes DZC ON DZC.ZipCode= CASE WHEN LEN(b.BillingZipPostalCode)=10 and b.BillingZipPostalCode like '%-%'
-							THEN SUBSTRING(b.BillingZipPostalCode,1,CHARINDEX('-', b.BillingZipPostalCode)-1)
-							WHEN LEN(b.BillingZipPostalCode)=4
-							THEN RIGHT(CONCAT('00000',ISNULL(b.BillingZipPostalCode,'')),5)
-							ELSE b.BillingZipPostalCode
-							END
-	  ) AS source 
-	on (Target.SFKey COLLATE SQL_Latin1_General_CP1_CS_AS = source.SFKey COLLATE SQL_Latin1_General_CP1_CS_AS)
-	WHEN MATCHED 
-		THEN UPDATE
-	   SET target.[GUID] = source.[guid],
-		target.AccountName = source.[AccountName],
-		target.GeographyID = source.GeographyID,
-		target.BillingAddress = source.[BillingAddress],
-		target.BillingState = source.[BillingState],
-		target.BillingCity = source.[BillingCity],
-		target.LocationType = source.[LocationType],
-		target.Brand = source.brand,
-		target.[Type] = source.[Type],
-		target.EAPV_status = source.[EAPV_status],
-		target.AccountOwner = source.AccountOwner,
-		target.PrimaryCuisine = source.[PrimaryCuisine],
-		target.RestaurantProfile = source.[RestaurantProfile],
-		target.FoodserviceType = source.[FoodserviceType],
-		target.ZupplerNetwork = source.[ZupplerLocation],
-		target.Grade = source.Grade,
-		target.RestaurantTier = source.RestaurantTier,
-		target.Segment = source.Segment,
-		target.CuisineType = source.CuisineType,
-		target.[Rank] = source.[Rank],
-		target.[SalesForceBrandId] = source.[SalesForceBrandId]
-	WHEN NOT MATCHED BY TARGET 
-		THEN INSERT(
-		[SFKey]
-		  ,[GUID]
-		  ,[AccountName]
-		  ,[GeographyID]
-		  ,[BillingAddress]
-		  ,[BillingState]
-		  ,[BillingCity]
-		  ,[LocationType]
-		  ,[Brand]
-		  ,[Type]
-		  ,[EAPV_status]
-		  ,[AccountOwner]
-		  ,[PrimaryCuisine]
-		  ,[RestaurantProfile]
-		  ,[FoodserviceType]
-		  ,ZupplerNetwork
-		  ,Grade
-		  ,RestaurantTier
-		  ,Segment
-		  ,CuisineType
-		  ,[Rank]
-		  ,[SalesForceBrandId]
-	   ) 
-	 VALUES
-	   (
-	   source.[SFKey]
-	   ,source.[GUID]
-	   ,source.[AccountName]
-	   ,source.GeographyID
-	   ,source.[BillingAddress]
-	   ,source.[BillingState]
-	   ,source.[BillingCity]
-	   ,source.[LocationType]
-	   ,source.brand
-	   ,source.[Type]
-	   ,source.[EAPV_status]
-	   ,source.AccountOwner
-	   ,source.PrimaryCuisine
-	   ,source.RestaurantProfile
-	   ,source.FoodserviceType
-	   ,source.ZupplerLocation
-	   ,source.Grade
-	   ,source.RestaurantTier
-	   ,source.Segment
-	   ,source.CuisineType
-	   ,source.[Rank]
-	   ,source.[SalesForceBrandId]
-	   )
-	WHEN NOT MATCHED BY SOURCE AND target.SFkey COLLATE SQL_Latin1_General_CP1_CS_AS <>'XXXXXXXXXXXXXXX' 
-	THEN DELETE;
+-- Production server
 
 
-	UPDATE DFR -- 2nd part 
- -- Purpose: Updates the parent-child relationships for Salesforce restaurants. Links 
- -- restaurants (DFR) with their parent accounts (DFR_parent) based on the ParentAccountID 
- -- in the SfSync table.
-	SET DFR.SFParentRestaurantKey=DFR_parent.SFRestaurantKey
-	FROM [DinDWHS].[dbo].[DimSalesForceRestaurant] AS DFR
-		JOIN DinDB.DinIntegrations.SalesForce.SfSync s ON DFR.SFKey COLLATE SQL_Latin1_General_CP1_CS_AS = s.AccountID COLLATE SQL_Latin1_General_CP1_CS_AS
-		LEFT JOIN [DinDWHS].[dbo].[DimSalesForceRestaurant] DFR_parent ON DFR_parent.SFKey COLLATE SQL_Latin1_General_CP1_CS_AS = s.ParentAccountID COLLATE SQL_Latin1_General_CP1_CS_AS;
---Updating DimFingerprint
-	MERGE DinDWHS.[dbo].[DimFingerprint] AS target
-	USING (
-	  SELECT DISTINCT
-	   pos.FingerprintID AS FingerprintID,
-	   isnull(sfr.SFRestaurantKey,1) AS SFRestaurantKey,
-	   pos.MerchantNumber AS MerchantNumber, 
-	   pos.MerchantLegalName AS MerchantLegalName, 
-	   pos.MerchantName AS MerchantName, 
-	   pos.AddressLine01 AS AddressLine01, 
-	   pos.CityName AS CityName, 
-	   pos.StateProvince AS StateProvince, 
-	   pos.PostalCode AS PostalCode, 
-	   pos.CountryCode AS CountryCode, 
-	   pos.SalesForceID AS SalesForceID,
-	   CONCAT(CAST(pos.AnalysisStartDate AS VARCHAR(10)), '--><-- ',CAST(pos.AnalysisEndDate AS VARCHAR(10))) AS [AnalysisPeriod],
-	   ISNULL(ps.DisplayName,'Unknown') AS Segmentation,
-	   v.DisplayName AS Vendor,
-	   pp.DisplayName AS PaymentProcessor
-	  -- CASE ISNULL(pos.Segmentation,'')
-			--WHEN 'a' THEN 'Airport & Rail/Bus Restaurants'
-			--WHEN 'c' THEN 'Chain'
-			--WHEN 'e' THEN 'Event Planning/Caterers'
-			--WHEN 'g' THEN 'Gentlemen''s Clubs'
-			--WHEN 'h' THEN 'Hotels/Resorts/Casinos'
-			--WHEN '.i' THEN 'Independent'
-			--WHEN 'l' THEN 'Liquor Stores'
-			--WHEN 'm' THEN 'Military'
-			--WHEN 'o' THEN 'Onsite'
-			--WHEN 'r' THEN 'Retail outlets'
-			--WHEN 's' THEN 'Sports & entertainment'
-			--WHEN 't' THEN 'Travel Centers'
-			--WHEN 'v' THEN 'Pay Platforms, Delivery/Online Ordering Sites'
-			--WHEN 'vending machine' THEN 'Vending Machine'
-			--WHEN 'u' THEN 'Unknown'
-			----WHEN 'd' THEN 'Delivery'
-			--ELSE 'No segmentations'
-			--END AS Segmentation
+declare @maxDate date = (select max(txndate) from DinBilling.billing.detailinvoicehistorydata)  -- DA UTVRDIMO najsveziji tj "najviši" datum transakcija
+																						-- koji kasnije koristimo da setujemo end-valid date za redove
 
-	  from DinDB.[DinShared].[Finance].[PosFingerprints] AS pos
-	  left join Dindb.Dinshared.[Finance].[PosVendors] AS v ON v.Id = ISNULL(pos.Vendor,0)
-	  left join Dindb.Dinshared.[Finance].[PosPaymentProcessors] AS pp ON pp.Id = ISNULL(pos.PaymentProcessor,0)
-	  left join Dindb.Dinshared.[Finance].[PosSegmentation] as ps ON ps.id = pos.segmentation
-		LEFT JOIN DinDWHS.[dbo].[DimSalesForceRestaurant] AS sfr ON pos.SalesforceID COLLATE SQL_Latin1_General_CP1_CS_AS = sfr.SFKey COLLATE SQL_Latin1_General_CP1_CS_AS
-	  ) AS source 
-	ON (target.FingerprintID = source.FingerprintID)
-	WHEN MATCHED 
-		THEN UPDATE 
-	   SET target.SalesForceID = source.SalesForceID,
-		target.SFRestaurantKey = source.SFRestaurantKey,
-		target.Segmentation = source.Segmentation,
-		target.Vendor = source.Vendor,
-		target.PaymentProcessor = source.PaymentProcessor
-	WHEN NOT MATCHED BY TARGET 
-		THEN INSERT(    
-		FingerprintID, 
-		SFRestaurantKey, 
-		MerchantNumber, 
-		MerchantLegalName, 
-		MerchantName, 
-		AddressLine01,
-		CityName, 
-		StateProvince, 
-		PostalCode, 
-		CountryCode, 
-		SalesForceID, 
-		AnalysisPeriod,
-		Segmentation,
-		Vendor,
-	    PaymentProcessor
-		  ) 
-	 VALUES
-	   ( 
-		source.FingerprintID, 
-		source.SFRestaurantKey, 
-		source.MerchantNumber, 
-		source.MerchantLegalName, 
-		source.MerchantName, 
-		source.AddressLine01, 
-		source.CityName, 
-		source.StateProvince, 
-		source.PostalCode, 
-		source.CountryCode, 
-		source.SalesForceID, 
-		source.AnalysisPeriod,
-		source.Segmentation,
-		source.Vendor,
-	    source.PaymentProcessor
-	  ) 
-	WHEN NOT MATCHED BY SOURCE AND target.FingerprintID<>0 
-	THEN DELETE;
-	-- Purpose: Synchronizes DimFingerprint with data from PosFingerprints, linking 
-	-- fingerprints to Salesforce restaurants (SFRestaurantKey).
+-- radimo MERGE INTO TARGET USING SOURCE sintax za populaciju target-a [BillingGroupLocations] 
+-- preko podataka dostupnih u source-u [DetailInvoiceHistoryData] + din_billing_group sa BackOffice-a
 
---Updating FactTransaction
-		UPDATE FT
-		SET FT.SFRestaurantKey = DF.SFRestaurantKey
-		FROM DinDWHS.dbo.FactTransaction AS FT
-			LEFT JOIN DinDWHS.dbo.DimFingerprint AS DF ON DF.FingerprintID = FT.FingerprintID
-		WHERE FT.SFRestaurantKey <> DF.SFRestaurantKey AND DF.FingerprintID IS NOT NULL AND FT.FingerprintID <> 0;
-		UPDATE FT
-		SET FT.SFRestaurantKey = ISNULL(DSFR.SFRestaurantKey,1)
-		FROM DinDWHS.dbo.FactTransaction AS FT
-			LEFT JOIN DinDWHS.dbo.DimSalesForceRestaurant AS DSFR ON FT.SFRestaurantKey = DSFR.SFRestaurantKey
-		WHERE DSFR.SFRestaurantKey IS NULL;
-
---- The final part of the stored procedure focuses on synchronizing data in the FactTransaction table and ensuring 
--- its alignment with the updated DimFingerprint and DimSalesForceRestaurant dimension tables. It also includes 
--- error handling and transaction management to maintain data consistency and ensure any failures are handled gracefully.
-
---Purpose: Synchronizes the SFRestaurantKey in the FactTransaction table using data from the 
---DimFingerprint table.
-
---Process:
---The FactTransaction table is updated where:
---SFRestaurantKey in FactTransaction differs from the SFRestaurantKey in DimFingerprint 
---(ensures only mismatched rows are updated).
-
---FingerprintID exists in both the FactTransaction and DimFingerprint tables (i.e., 
---valid and non-null).
-
---FactTransaction.FingerprintID is not 0 (avoids processing invalid or default rows).
-
---The LEFT JOIN ensures that even rows with no match in DimFingerprint will not block 
---processing of valid matches.
-
---Outcome: Ensures that transaction records in FactTransaction point to the correct 
---Salesforce restaurant (SFRestaurantKey) based on the fingerprinting information.
+merge Dinshared.[Business].[BillingGroupLocations] as target   -- shared business dimension table, znaci koristim MERGE za popunjavanje te dimenzije na osnovu aggregated history data 
+using (
+select *
+from (
+select bg.ID BackOfficeBillingGroupId,SiteId, RTRIM(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(di.BillGroup,
+													'''',''),'/','-'),'É','E'),'P. F.','P F'),'B.GOOD','BGOOD') ,'  ',' '),'-TERMED',''),' - ','-'),'-TERMINATED',''),'-TERM',''),'.',''),'!',''),'_',' '),' -','-')) AS BillingGroupDisplayName, 
+FORMAT(MIN(TXNDATE),'yyyy-MM-01') AS ValidFrom,   --vrsimo agregaciju history data za svaku kombinaciju SiteId i BillGroup aliased kao BillingGroupDisplayName, uslovima merge when matched operacije, cime racunamo ValidFrom , ValidTo i Rnk polja 
+IIF(EOMONTH(MAX(TXNDATE)) = @maxDate ,'9999-12-31',EOMONTH(MAX(TXNDATE)))  AS ValidTo -- ValidFrom je prvi dan u mesecu najranije txn, ValidTo je poslednji dan u mesecu poslednje txn, koji eventualno dobija vrednost daleke buducnosti u slucaju da = deklarisanoj varijabli @maxDate
+, ROW_NUMBER() OVER (partition by di.SiteId,RTRIM(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(di.BillGroup,'''',''),'/','-'),'É','E'),'P. F.','P F'),'B.GOOD','BGOOD') ,'  ',' '),'-TERMED',''),' - ','-'),'-TERMINATED',''),'-TERM',''),'.',''),'!',''),'_',' '),' -','-'))  ORDER BY bg.ID DESC) AS Rnk
+FROM DinBilling.billing.detailinvoicehistorydata di
+LEFT join DinMaster.dbo.din_billing_group bg on RTRIM(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(bg.billing_id,'''',''),'/','-'),'É','E'),'P. F.','P F'),'B.GOOD','BGOOD') ,'  ',' '),'-TERMED',''),' - ','-'),'-TERMINATED',''),'-TERM',''),'.',''),'!',''),'_',' '),' -','-')) = 
+RTRIM(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(di.BillGroup,'''',''),'/','-'),'É','E'),'P. F.','P F'),'B.GOOD','BGOOD') ,'  ',' '),'-TERMED',''),' - ','-'),'-TERMINATED',''),'-TERM',''),'.',''),'!',''),'_',' '),' -','-'))
+where txndate >= '2025-02-01'
+and di.siteid is not null
+group by SiteId, RTRIM(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(di.BillGroup,'''',''),'/','-'),'É','E'),'P. F.','P F'),'B.GOOD','BGOOD') ,'  ',' '),'-TERMED',''),' - ','-'),'-TERMINATED',''),'-TERM',''),'.',''),'!',''),'_',' '),' -','-')), bg.ID
+) s where s.rnk = 1  -- veza from clause, line 17  --sve je spakovano u subquery s da bi se odradio WHERE uslov sa vracanjem origin record-a (izbegavamo duplikate)
+) as source
+on source.SiteId = target.SiteId
+	and source.BillingGroupDisplayName = target.BillingGroupDisplayName
+when matched then update		-- radimo siguran update validto kolone i eventualan update BackOfficeBillingGroupId-a
+set 
+target.validto = source.validto,
+target.BackOfficeBillingGroupId = IIF(source.BackOfficeBillingGroupId = -1  , target.BackOfficeBillingGroupId, source.BackOfficeBillingGroupId)
+when not matched by target then insert  -- obicno insertovanje novog reda sa novim ID-em ,posredstvom newid() funkcije, u slucaju not matched  
+(
+	Id, BackOfficeBillingGroupId, SiteId, BillingGroupDisplayName, validfrom, validto
+)
+values(
+	NEWID(),
+	source.BackOfficeBillingGroupId, source.SiteId, source.BillingGroupDisplayName, source.validfrom, source.validto
+)
+;  -- videti .txt file "Part 4.  Billing Group.sql" za skracenu verziju
 
 
-		EXEC [dbo].[UpdateSalesforceRestaurantRankings];
+-- Switch to analytics
+-- 06.03.25 2nd step na analytical serveru
 
-COMMIT TRANSACTION
-	END TRY
-	BEGIN CATCH
-	SELECT  
-		ERROR_NUMBER() AS ErrorNumber  
-		,ERROR_SEVERITY() AS ErrorSeverity  
-		,ERROR_STATE() AS ErrorState  
-		,ERROR_PROCEDURE() AS ErrorProcedure  
-		,ERROR_LINE() AS ErrorLine  
-		,ERROR_MESSAGE() AS ErrorMessage;
-	IF @@TRANCOUNT>0
-	ROLLBACK TRANSACTION
-	END CATCH
-END
---Purpose: Ensures that any errors during the procedure result in a rollback of the entire transaction, preserving database integrity.
+use DinDWHS;   --sadrzi [dbo].[DimBillingGroup] koja je u left join-u 
 
---Process:
 
---TRY Block: 
+declare @maxDateKey int = (select max(datekey) from dbo.FactTransaction);
+set @maxDateKey = concat(left(@maxDateKey,6), '01');  -- setovanje da bude prvi dan aktuelnog meseca u kom radimo presek (kako bismo koristili skorije transakcije prilikom update-a) 
 
---If the code runs successfully, the transaction is committed at the end.
+--    PUNJENJE PODATAKA U DIMENZIJU   [dbo].[DimBillingGroup]        i to u tri navedene kolone u zagradi sa podacima iz CTE tabele koja je kreirana u prvim 
+-- redovima preko [BillingGroupLocations] tabele (gde koristimo  [BillingGroupDisplayName] iz source tabele i za popunjanjanje [BillingGroupKey] i [BillingGroupName] kolona [DimBillingGroup] dimenzije)
+with qry AS (		-- CTE za extracting BillingGroup informacija
+select distinct BillingGroupDisplayName, BackOfficeBillingGroupId
+from Dindb.Dinshared.[Business].[BillingGroupLocations]  -- linked server na analytical ([BillingGroupLocations] je shared business dimension table, tj target u prvom kveriju)
+) --*****  tabela u koju smo merge-vali podatke iz dihd billing baze u gornjem kveriju 
+insert into [dbo].[DimBillingGroup] ([BillingGroupKey],[BillingGroupName],[BillingGroupBackOfficeId])
+select ROW_NUMBER() OVER (order by q.BillingGroupDisplayName) + (select max([BillingGroupKey]) from [dbo].[DimBillingGroup]), -- struktura koja pravi jednu kolonu kojoj se dodaje max vrednost BillingGroupKey-a posredstvom aritmeticke operacije sabiranja 
+q.BillingGroupDisplayName, ISNULL(q.BackOfficeBillingGroupId,-1)															
+from qry q
+left join [dbo].[DimBillingGroup] bg on bg.BillingGroupName = q.BillingGroupDisplayName -- druga kolona INSERT stejtmenta
+								and bg.BillingGroupBackOfficeId = q.BackOfficeBillingGroupId -- treca kolona INSERT stejtmenta
+								where bg.BillingGroupKey is null -- prva kolona; da osiguramo da radimo INSERT samo onih vrednosti koje nisu već sadržane u tabeli [DimBillingGroup] bg 
 
---CATCH Block:
+--  ROW_NUMBER() po pravilu dodeljuje sukcesivno uvecane vrednosti redovima za 1, u ovom slucaju nastavljaju dodeljivanje od poslednje vrednosti BillingGroupKey ključa uvecane za 1 
+--  dobijajući tako koninuiranu sekvencu vrednosti ili rastući niz krenuvši od max vrednosti BillingGroupKey-a uvećane za 1
+--		PRIPREMA ZA UPDATE FACT-TRANSACTION TABELE KOJI OMOGUCAVA POVEZIVANJE TRANSAKCIJA SA BILLING-GRUPAMA
+;with qry as (			-- CTE koji koristimo za top row per SiteId + prosirujemo prethodni CTE sa 2 dodante kolone : SIteId i rnk putem window funk.
+select SiteId,BackOfficeBillingGroupId,BillingGroupDisplayName, ROW_NUMBER() OVER (partition by SiteId Order by validfrom desc) rnk  --  omogucavajuci da izaberemo najsvezije BilingGroup redove
+from Dindb.Dinshared.[Business].[BillingGroupLocations]	 -- PONAVLJAMO u FROM istu source tabelu iz prethodnog CTE-a (share-vana dimenz. BillingGroupLocations)	-- grupisane po SiteId particiji u odnosu na validfrom 
+)
+-- sa UPDATE koji sledi radimo dodeljivanje vrednosti BillingGroupKey iz FT tabele vrednostima iz dimenzije dbo.DimBillingGroup tabele 
+-- sto implicira da hocemo da povezemo detalje transakcije /svaki red transakcije sa odgovarajucom Billing grupom 
+-- koju smo u prethodnoj skripti popunjavali sa podacima iz [BillingGroupLocations] tabele, joinovanom sa [DimBillingGroup] na dve kolone 
+-- i sa filterom WHERE bg.BillingGroupKey IS NULL cime osiguramo INSERT samo onih vrednosti koje nisu već sadržane u tabeli
 
---If an error occurs, relevant details are captured and displayed (ERROR_NUMBER, ERROR_SEVERITY, etc.).
---If the transaction is still open (@@TRANCOUNT > 0), it is rolled back to undo any partial changes.
---Outcome: Guarantees data consistency by ensuring that either:
-	--All updates and inserts complete successfully and are committed.
-	--No changes are applied if an error occurs, avoiding partial updates.
+update ft set BillingGroupKey = bg.BillingGroupKey   -- bg je dimenziona DimBillingGroup tabela
+from dbo.FactTransaction ft
+inner join dbo.DimRestaurant res on res.RestaurantKey = ft.RestaurantKey  --(DimRestaurant nam treba kao spona zbog veze sa BillingGropLocations,koja stoji iza izvedenog qry)
+inner join qry q on q.siteid = res.RLP_ID	-- kupeći najsvežije BillingGroup detalje/redove izmedju ostalog odg. BillingGroupKey-eve koje koristimo za filterisanje
+inner join dbo.DimBillingGroup bg on bg.[BillingGroupName] = q.BillingGroupDisplayName 
+where ft.VolumeTypeKey = 1		-- restriktivno polje uzimajuci samo redove sa VolumeType = 1 u obzir  (flag da je nešto fakturisano restoranima i ona figuriše u kocki kao takva) 
+and q.rnk = 1					-- kupeci najsvezije BillingGroup detalje/redove (Order by validfrom desc koji pozivam sa WHERE q.rnk = 1)
+and ft.datekey >= @maxDateKey   -- koristeci filter radi uvrštavanja samo najsvežijih tj najmlađih transakcija počevši od prvog dana meseca kad radimo presek  
+and ft.BillingGroupKey = 0		-- osiguravajući da se ažuriraju samo novi redovi FT tabele   
+									-- tj. oni redovi FT tabele koji do tada nisu imali dodeljen BillingGroup ključ
 
---Key Highlights
+-- poenta WHERE Clause-a u MERGE i UPDATE-u:
 
---Data Synchronization Across Dimensional Tables: Updates the SFRestaurantKey in FactTransaction using data from both DimFingerprint and DimSalesForceRestaurant. 
--- This ensures that all transaction records are tied to valid dimensional data.
---Error Handling and Rollbacks: The TRY...CATCH block protects the database from corruption or inconsistency by rolling back the transaction if any part of the procedure fails.
---Integration with Rankings Procedure: Delegates the task of updating Salesforce restaurant rankings to a separate procedure, streamlining the ETL process and ensuring modularity.
+-- Filterisanje koje primenjujemo sluzi sledecoj svrsi:
 
---Overall Flow of the Procedure
+-- de-duplikacija i jedinstvenost(uniquness)
+-- unutar MERGE , particionisanje koje koristimo (rnk=1) osigurava da za svaki SiteId i BillingGroupDisplayName, se koristi samo jedan red za update ili insert u share BillingGroupLocations
+-- prevencija overwritting postojecih podataka
+-- koristeci bg.BIllingGroupKey is null ILI ft.BillingGroupKey = 0 osigurava da se unose samo oni redovi koje nemaju vrednost, cime postojece vrednosti nisu "pregazene"	
+-- data range control 
+-- uslovi na txndate i @maxdatekey osigurava da su samo noviji redovi procesuirani . Sto je krucijalno za inkrementalno lodovanje cime izbegavamo update istorijskih podataka bespotrebno
+-- ocuvanje konsistentnost i ispravnog povezivanja transakcija sa dimenzijom
+-- radeci JOIN na novi SiteID i BillingGroupDisplayName , pritom koristeci lookup tabelu za povlacenje sa oba servera nam osigurava da samo azurirani transaction redovi su pravilno povezani 
+-- sa dimenzijom BilingGroup (dimenzionim podacima)
 
---Disable constraints temporarily to allow seamless updates across related tables.
---Update or insert into DimSalesForceBrand and DimSalesForceRestaurant tables to reflect the latest Salesforce data.
---Establish parent-child relationships in DimSalesForceRestaurant.
---Synchronize DimFingerprint with point-of-sale fingerprint data.
---Update the FactTransaction table to ensure consistency with the dimensional tables.
---Call the rankings update procedure to recalculate any metrics dependent on the updated data.
---Ensure atomicity and consistency by committing the transaction or rolling it back in the event of an error.
 
---Final Outcome
+-- inter-serverska komunikacija:
+--	u prvi mah radimo na produkcionom serveru kako bismo radili data cleansing + extracting iz sharovane tabele [BillingGroupLocations] radi daljeg unosenja u dimenzionu  tabelu 
+--  u drugom mahu se radi update dimenzione tabele - se kacimo na analiticki server kako bismo osigurali konzistentnost podataka , koristeci leftjoin sturkture sa tabelom u koju 
+--  radimo INSERTovanje, sa uslovima obezbedjujuci da su uneseni samo novi redovi u dimezionu tabelu 
 
---This procedure ensures that the dimensional and fact tables are fully synchronized with updated Salesforce and fingerprinting data. By handling edge cases 
--- (e.g., missing SFRestaurantKey, invalid fingerprints) and leveraging comprehensive error handling, it maintains the integrity and accuracy of the data warehouse.
+--Prvo izvrsavanaje preko Produkcionog :
+
+--- dobijanje najsvezijih transaction date podataka 
+--- merge-ovanje agregiranih billing group podataka ( iz DetailInvoiceHistoryData i BillingGroup lookup tabele) unutar shared tabele . Prilikom merge-vanja radi update postojecih 
+--- redova ako postoji match tj unosi nove redove ako ne postoji 
+
+
+--Zatim dolazi izvrsavanje preko Analytics servera:
+
+--- prebacujemo context na analiticke baze
+--- insertovanje novih billing group rekorda u dimenzionu tabelu ako nisu tamo prisutni
+--- azuriranje UPDATE transaction rekorda (unutar FactTransaction) sa ispravnim BillingGroupKey koristeci JOIN izmedju dimRestaurant tabele i novo 
+--- unesenih dim. podataka WHERE uslovi osiguravaju samo novi i neprocesuirani redovi su azurirani i uneseni, tako obezbedjujuci tacne i azurne podatke u ETL procesu 
+
+
+
+--Other Commented JOINs or Conditions:
+--For instance, the commented join on dimuniquepatron in another procedure indicates that sometimes additional checks or different data sources might be used. Here, however, it is not active.
+
+
+--ADDITIONAL QUESTION regardign execution sequensce in the same batch on Sql. Ser. Man. Stud. - SSMS 
+
+--As there are CTE for Extracting Billing Group Information and another one CTE to Pick the Top Row per Site , 
+--how do we perform the execution of the entire query provided in my previous prompt?
+
+--ANSWER
+
+--When you execute a single batch that contains multiple CTEs (Common Table Expressions) followed by DML 
+--(INSERT/UPDATE) statements, SQL Server processes the CTEs as “inline views” within that batch. In your provided query, 
+--there are multiple distinct sections where CTEs are defined and then immediately used by subsequent statements. Here’s 
+--how the overall execution works:
+
+--Execution Order Overview
+--Batch Execution: All parts of the query are sent to the server in one batch. SQL Server’s query optimizer will parse 
+--the entire batch before starting execution.
+
+--CTE Definition is Immediate and “Inline”:
+
+--A CTE is defined and used only in the statement that immediately follows it.
+
+--In your query, one CTE (for extracting billing group information) is defined and then used in an INSERT statement for 
+--populating the DimBillingGroup table.
+
+--Next, another CTE (for picking the top row per Site) is defined and then used to drive the UPDATE statement that sets 
+--BillingGroupKey on the FactTransaction table.
+
+--Step-by-Step Processing: Each “segment” of your overall script is processed independently as the batch executes:
+
+--Phase 1 (Production/Shared update via MERGE): The MERGE statement first uses its internal derived tables (which are 
+--built using a CTE) to update or insert into the shared BillingGroupLocations table.
+
+--Phase 2 (Switch to analytics environment): After switching the database context (USE DWHS;), a new variable is declared 
+--and set, and subsequent CTE definitions are used:
+
+--The first CTE (qry) extracts distinct BillingGroupDisplayName and BackOfficeBillingGroupId from the shared table. It is 
+--then consumed by an INSERT statement that loads new records into the DimBillingGroup table.
+
+--Then, another CTE (qry again, defined with a different purpose) is used to rank billing groups per Site. That CTE is then 
+--consumed in an UPDATE statement that updates the FactTransaction table.
+
+--Single Batch, Sequential Execution: Although you have multiple CTE definitions, each is defined and immediately consumed 
+--by the statement that follows it. Within a given statement:
+
+--The CTE is first logically “built” (conceptually, its query defines a result set).
+
+--The main query then uses that result set. Thus, you don’t run the CTEs separately; they’re part of a single execution 
+--plan for that statement.
+
+--How to Execute the Entire Query
+--Run as One Batch: In SQL Server Management Studio (SSMS), you would:
+
+--Paste the entire script (all phases, with the MERGE, USE DWHS;, the first CTE with INSERT, the CTE with UPDATE, etc.) 
+--into a query window.
+
+--Execute the script. The SQL Server engine will process the batch from top to bottom.
+
+--Context Switching: The script includes a USE DWHS; instruction. This tells SQL Server to change the current database 
+--context to DWHS for the statements that follow. Therefore, when you run the entire query batch, SQL Server will:
+
+--Execute the production portion (MERGE and related logic) in one database.
+
+--Then switch context (using the USE statement) and run the analytics portion (the INSERT into DimBillingGroup and the 
+--UPDATE to FactTransaction) in the DWHS database.
+
+--Multiple Statements, One Execution: All the defined CTEs, INSERTs, and UPDATEs are executed in sequence as part of 
+--the same batch. They rely on each other only where the later statements reference previously defined CTEs or temporary 
+--objects.
+
+--Why This Is Useful
+--Modular and Readable: Using CTEs to extract and transform data makes each segment self-contained and easier to understand.
+
+--Sequential Correctness: By switching context and defining CTEs, you ensure that:
+
+--Data is first updated in the production context (shared business tables).
+
+--Afterwards, the new or updated billing group information is propagated into the analytics environment.
+
+--Consistency: Since the entire query is executed in one batch, you know that all transformations occur in sequence 
+--without the need for intermediate manual steps.
+
+--Final Remarks
+--The execution of the entire query involves:
+
+--Submitting the full script as one batch.
+
+--SQL Server processes the batch from the top down, evaluating and using each CTE immediately with its corresponding DML 
+--statement.
+
+--The USE statement changes the database context so that later statements run on a different database.
+
+--Overall, this approach allows you to first update your operational data (production side) and then update your 
+--analytical tables once the changes are made.
